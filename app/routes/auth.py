@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 from datetime import datetime, date
 import bcrypt
-from app.config import JWT_SECRET
 from app.models.users import User
 from app.db.db import users_collection
 from app.services import firebase_service
@@ -41,7 +40,8 @@ async def register_user(user: User):
         photo_url = user.photoURL or None
 
         # Check MongoDB first
-        if users_collection.find_one({"email": email}):
+        existing_user = await users_collection.find_one({"email": email})
+        if existing_user:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"message": "User already exists in database. Try logging in."}
@@ -76,17 +76,14 @@ async def register_user(user: User):
         else:
             mongo_user["password"] = None
 
-        users_collection.insert_one(mongo_user)
-
-        # Generate JWT token
-        token = firebase_service.generate_token(firebase_user.uid, firebase_user.email)
+        # Insert new user
+        await users_collection.insert_one(mongo_user)
 
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
             content={
                 "success": True,
                 "message": "Registration successful",
-                "token": token,
                 "user": {
                     "id": firebase_user.uid,
                     "email": firebase_user.email,
@@ -118,7 +115,7 @@ async def login_user(user: User):
         is_google_login = uid is not None and password is None
 
         # Check MongoDB
-        mongo_user = users_collection.find_one({"email": email})
+        mongo_user = await users_collection.find_one({"email": email})
         if not mongo_user:
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -154,15 +151,12 @@ async def login_user(user: User):
                     content={"message": "Invalid email or password."}
                 )
 
-        # Generate JWT token
-        token = firebase_service.generate_token(firebase_user.uid, firebase_user.email)
-
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
                 "success": True,
                 "message": "Login successful",
-                "token": token,
+             
                 "user": {
                     "id": firebase_user.uid,
                     "email": firebase_user.email,

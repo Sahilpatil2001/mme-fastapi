@@ -1,7 +1,14 @@
-from firebase_admin import auth as admin_auth, exceptions
-from jose import jwt
-from datetime import datetime, timedelta
-from app.config import JWT_SECRET
+import firebase_admin
+from firebase_admin import auth as admin_auth, credentials, exceptions
+from datetime import datetime
+import os
+
+# -------------------------
+# Initialize Firebase
+# -------------------------
+if not firebase_admin._apps:  # prevent re-initialization
+    cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON"))
+    firebase_admin.initialize_app(cred)
 
 
 # -------------------------
@@ -9,9 +16,6 @@ from app.config import JWT_SECRET
 # -------------------------
 
 def create_user(uid: str = None, email: str = None, name: str = None, photo_url: str = None):
-    """
-    Create a new Firebase user.
-    """
     try:
         user = admin_auth.create_user(
             uid=uid,
@@ -27,9 +31,6 @@ def create_user(uid: str = None, email: str = None, name: str = None, photo_url:
 
 
 def get_user_by_email(email: str):
-    """
-    Fetch a Firebase user by email. Returns None if not found.
-    """
     try:
         return admin_auth.get_user_by_email(email)
     except exceptions.NotFoundError:
@@ -39,9 +40,6 @@ def get_user_by_email(email: str):
 
 
 def verify_user(uid: str, email: str):
-    """
-    Ensure UID matches the given email’s Firebase user.
-    """
     user = get_user_by_email(email)
     if not user:
         return None
@@ -50,13 +48,9 @@ def verify_user(uid: str, email: str):
     return user
 
 
-def generate_token(uid: str, email: str, expires_in_days: int = 7):
-    """
-    Generate JWT token for a Firebase user.
-    """
-    token_payload = {
-        "id": uid,
-        "email": email,
-        "exp": datetime.utcnow() + timedelta(days=expires_in_days)
-    }
-    return jwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
+def generate_firebase_custom_token(uid: str):
+    try:
+        custom_token_bytes = admin_auth.create_custom_token(uid)
+        return custom_token_bytes.decode("utf-8")
+    except Exception as e:
+        raise RuntimeError(f"Failed to generate Firebase custom token: {str(e)}")

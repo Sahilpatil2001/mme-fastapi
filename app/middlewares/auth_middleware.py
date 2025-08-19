@@ -3,44 +3,47 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from firebase_admin import auth as admin_auth
 from app.db.db import users_collection
 
+# Endpoints that don't require authentication
 PUBLIC_PATHS = ["/api/register", "/api/login", "/docs", "/openapi.json"]
 
-class AuthMiddleware(BaseHTTPMiddleware):
+class FirebaseAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # OPTIONS preflight
+        # Allow OPTIONS preflight requests
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # Public endpoints
+        # Skip auth for public endpoints
         if any(request.url.path.startswith(path) for path in PUBLIC_PATHS):
             return await call_next(request)
 
-        # Read Authorization header
+        # Get Authorization header
         auth_header = request.headers.get("authorization")
-        # print("Authorization header:", auth_header)  # debug
-
         if not auth_header:
             raise HTTPException(status_code=401, detail="No token provided")
 
+        # Expect format: "Bearer <firebase_token>"
         parts = auth_header.split()
         if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Invalid auth header format")
+            raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
-        token = parts[1]
+        fb_token = parts[1]  # Firebase ID token from frontend
 
         try:
-            decoded_token = admin_auth.verify_id_token(token)
+            # Verify Firebase ID token
+            decoded_token = admin_auth.verify_id_token(fb_token)
             uid = decoded_token.get("uid")
             email = decoded_token.get("email")
 
-            user = users_collection.find_one({"uid": uid}, {"password": 0})
+            # Fetch user from MongoDB (must await with Motor!)
+            user = await users_collection.find_one({"uid": uid}, {"password": 0})
             if not user:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            # Attach user to request state
             request.state.user = user
 
         except Exception as e:
-            print("Token verification failed:", e)
+            print("Firebase token verification failed:", e)
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
         return await call_next(request)

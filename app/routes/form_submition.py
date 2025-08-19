@@ -1,5 +1,4 @@
-
-# app/routes/answers.py
+# app/routes/form_submission.py
 from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from typing import List
@@ -27,11 +26,10 @@ async def submit_form(request: Request, payload: SubmissionCreate):
             "answers": [answer.dict() for answer in payload.answers]
         }
 
-        result = answers_collection.insert_one(submission_doc)
+        result = await answers_collection.insert_one(submission_doc)
 
         # Convert ObjectIds to strings for Pydantic
         submission_doc["_id"] = str(result.inserted_id)
-        # submission_doc["userId"] = str(submission_doc["userId"])
 
         return submission_doc
 
