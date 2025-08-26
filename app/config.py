@@ -21,8 +21,3 @@ if not os.path.isabs(SERVICE_ACCOUNT_PATH):
 
 if not os.path.exists(SERVICE_ACCOUNT_PATH):
     raise FileNotFoundError(f"Firebase service account key not found: {SERVICE_ACCOUNT_PATH}")
-
-# Initialize Firebase Admin SDK (only once)
-if not firebase_admin._apps:
-    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-    firebase_admin.initialize_app(cred)

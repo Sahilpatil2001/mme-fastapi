@@ -54,3 +54,5 @@ def generate_firebase_custom_token(uid: str):
         return custom_token_bytes.decode("utf-8")
     except Exception as e:
         raise RuntimeError(f"Failed to generate Firebase custom token: {str(e)}")
+    
+    

@@ -1,14 +1,18 @@
-from fastapi import Request, HTTPException
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from firebase_admin import auth as admin_auth
+from starlette.responses import JSONResponse
+
+from app.core.security import get_current_user  # 👈 reuse shared logic
 from app.db.db import users_collection
 
-# Endpoints that don't require authentication
+# Routes that do NOT require auth
 PUBLIC_PATHS = ["/api/register", "/api/login", "/docs", "/openapi.json"]
 
 class FirebaseAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Allow OPTIONS preflight requests
+        print("👉 Request path:", request.url.path)
+
+        # Allow CORS preflight
         if request.method == "OPTIONS":
             return await call_next(request)
 
@@ -16,34 +20,22 @@ class FirebaseAuthMiddleware(BaseHTTPMiddleware):
         if any(request.url.path.startswith(path) for path in PUBLIC_PATHS):
             return await call_next(request)
 
-        # Get Authorization header
-        auth_header = request.headers.get("authorization")
-        if not auth_header:
-            raise HTTPException(status_code=401, detail="No token provided")
-
-        # Expect format: "Bearer <firebase_token>"
-        parts = auth_header.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Invalid authorization header format")
-
-        fb_token = parts[1]  # Firebase ID token from frontend
-
         try:
-            # Verify Firebase ID token
-            decoded_token = admin_auth.verify_id_token(fb_token)
-            uid = decoded_token.get("uid")
-            email = decoded_token.get("email")
+            # 🔑 Decode token using security.py (Firebase OR backend JWT)
+            user = get_current_user(request)
 
-            # Fetch user from MongoDB (must await with Motor!)
-            user = await users_collection.find_one({"uid": uid}, {"password": 0})
-            if not user:
-                raise HTTPException(status_code=404, detail="User not found")
-
-            # Attach user to request state
-            request.state.user = user
+            # If Firebase, ensure the user exists in MongoDB
+            if "uid" in user:
+                db_user = await users_collection.find_one({"uid": user["uid"]}, {"password": 0})
+                if not db_user:
+                    return JSONResponse({"detail": "User not found"}, status_code=404)
+                request.state.user = db_user
+            else:
+                # For backend JWT (already contains uid/email)
+                request.state.user = user
 
         except Exception as e:
-            print("Firebase token verification failed:", e)
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
+            print("🔥 Middleware auth error:", repr(e))
+            return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
 
         return await call_next(request)

@@ -1,4 +1,4 @@
-# app/routes/users.py
+# app/routes/get-user.py
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -12,7 +12,7 @@ async def get_user(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # isplay name → fallback to email
+    # Display name → fallback to email
     display_name = (
         user.get("name")
         or user.get("displayName")

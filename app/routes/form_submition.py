@@ -1,34 +1,34 @@
 # app/routes/form_submission.py
-from fastapi import APIRouter, Request, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, status, Depends
 from typing import List
-from app.models.answers import StepAnswer, SubmissionCreate, SubmissionResponse, PyObjectId
-from app.db.db import answers_collection  # your MongoDB collection
+from app.models.answers import SubmissionCreate, SubmissionResponse
+from app.db.db import answers_collection
 from bson import ObjectId
 import logging
 
+# ✅ Import the shared auth logic
+from app.core.security import get_current_user  
+
 router = APIRouter()
 
-
-# This is working code 
 @router.post("/submit-form", response_model=SubmissionResponse, status_code=201)
-async def submit_form(request: Request, payload: SubmissionCreate):
+async def submit_form(
+    payload: SubmissionCreate,
+    user: dict = Depends(get_current_user)   # 🔑 User automatically extracted
+):
     try:
-        user = getattr(request.state, "user", None)
-        if not user or not user.get("uid"):
-            raise HTTPException(status_code=401, detail="User ID is missing in token")
-
+        # ✅ Ensure answers exist
         if not payload.answers or len(payload.answers) == 0:
             raise HTTPException(status_code=400, detail="Answers are required")
 
+        # ✅ Build the submission doc
         submission_doc = {
             "userId": user["uid"],
-            "answers": [answer.dict() for answer in payload.answers]
+            "answers": [answer.dict() for answer in payload.answers],
         }
 
+        # ✅ Insert into Mongo
         result = await answers_collection.insert_one(submission_doc)
-
-        # Convert ObjectIds to strings for Pydantic
         submission_doc["_id"] = str(result.inserted_id)
 
         return submission_doc
