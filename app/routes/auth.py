@@ -2,30 +2,13 @@
 from fastapi import APIRouter, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from firebase_admin import auth as admin_auth
-from datetime import datetime, timedelta, date
+from datetime import datetime, date
 import bcrypt
-import jwt
-from app.config import JWT_SECRET
 from app.models.users import User
 from app.db.db import users_collection
 from app.services import firebase_service
 
 router = APIRouter()
-
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 1
-
-
-# ----------------------------
-# Helper: Generate backend JWT
-# ----------------------------
-def create_backend_jwt(uid: str, email: str):
-    payload = {
-        "uid": uid,
-        "email": email,
-        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 # ----------------------------
@@ -47,7 +30,7 @@ async def register_user(user: User, request: Request):
                 detail=f"Missing required fields: {', '.join(missing)}"
             )
 
-        # Check if user exists
+        # Check if user exists in MongoDB
         existing_user = await users_collection.find_one({"email": user.email})
         if existing_user:
             raise HTTPException(
@@ -55,26 +38,42 @@ async def register_user(user: User, request: Request):
                 detail="User already exists. Please log in."
             )
 
+        # -------------------------------
         # Case: Google registration
+        # -------------------------------
         if is_google_user:
-            firebase_user = firebase_service.get_user_by_email(user.email)
-            if not firebase_user:
-                firebase_user = firebase_service.create_user(
+            try:
+                firebase_user = admin_auth.get_user_by_email(user.email)
+            except:
+                firebase_user = admin_auth.create_user(
                     uid=user.uid,
                     email=user.email,
-                    name=f"{user.firstName or ''} {user.lastName or ''}".strip(),
+                    display_name=f"{user.firstName or ''} {user.lastName or ''}".strip(),
                     photo_url=user.photoURL or None
                 )
             uid = firebase_user.uid
             hashed_pw = None
 
-        # Case: Normal registration
+        # -------------------------------
+        # Case: Manual registration
+        # -------------------------------
         else:
-            uid = user.uid or str(datetime.utcnow().timestamp())  # fallback UID
+            # 1. Create user in Firebase
+            firebase_user = admin_auth.create_user(
+                email=user.email,
+                password=user.password,
+                display_name=f"{user.firstName or ''} {user.lastName or ''}".strip(),
+            )
+            uid = firebase_user.uid
+
+            # 2. Hash password for MongoDB (not same as Firebase storage)
             hashed_pw = bcrypt.hashpw(
                 user.password.encode("utf-8"), bcrypt.gensalt()
             ).decode("utf-8")
 
+        # -------------------------------
+        # Save to MongoDB
+        # -------------------------------
         mongo_user = user.dict()
         mongo_user["uid"] = uid
         mongo_user["password"] = hashed_pw
@@ -109,89 +108,55 @@ async def register_user(user: User, request: Request):
         raise HTTPException(status_code=500, detail="Server error during registration")
 
 
+
 # ----------------------------
 # Login
+# ----------------------------
 @router.post("/login")
-async def login_user(user: User, request: Request):
+async def login_user(request: Request):
+    """
+    Login with Firebase only.
+    Expect client to send Firebase ID token in Authorization header.
+    """
     try:
-        mongo_user = None
+        # 🔑 Expect Firebase ID token from frontend
+        auth_header = request.headers.get("authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing Firebase ID token")
 
-        # ----------------------------
-        # Case 1: Google Login
-        # ----------------------------
-        if user.isGoogleUser or (user.uid and not user.password):
-            auth_header = request.headers.get("authorization")
-            if not auth_header or not auth_header.startswith("Bearer "):
-                raise HTTPException(
-                    status_code=401,
-                    detail="Firebase token required for Google login"
-                )
+        fb_token = auth_header.split(" ")[1]
 
-            fb_token = auth_header.split(" ")[1]
-            
+        # ✅ Verify Firebase token
+        try:
+            decoded = admin_auth.verify_id_token(fb_token)
+        except Exception as e:
+            print("❌ Firebase token verification failed:", repr(e))
+            raise HTTPException(status_code=401, detail="Invalid or expired Firebase token")
 
-            try:
-             print("🔑 Received Firebase token:", fb_token[:50], "...")
-             decoded = admin_auth.verify_id_token(fb_token)
-             print("✅ Decoded Firebase token:", decoded)
-            
-             # ✅ Verify Firebase ID token
+        uid = decoded.get("uid")
+        email = decoded.get("email")
 
-                # decoded = admin_auth.verify_id_token(fb_token)
-            except Exception as e:
-                print("❌ Firebase token verification failed:", repr(e))
-                raise HTTPException(status_code=401, detail="Invalid Firebase token")
+        # 🔍 Ensure user exists in MongoDB
+        mongo_user = await users_collection.find_one({"uid": uid})
+        if not mongo_user:
+            new_user = {
+                "uid": uid,
+                "email": email,
+                "firstName": decoded.get("name", "").split(" ")[0] if decoded.get("name") else None,
+                "lastName": decoded.get("name", "").split(" ")[1] if decoded.get("name") and len(decoded.get("name").split(" ")) > 1 else None,
+                "photoURL": decoded.get("picture"),
+                "isGoogleUser": bool(decoded.get("firebase", {}).get("sign_in_provider") == "google.com"),
+                "createdAt": datetime.utcnow(),
+            }
+            await users_collection.insert_one(new_user)
+            mongo_user = new_user
 
-            uid = decoded.get("uid")
-            email = decoded.get("email")
-
-            # ✅ Ensure user exists in Mongo
-            mongo_user = await users_collection.find_one({"uid": uid})
-            if not mongo_user:
-                # auto-register new google user if not found
-                new_user = {
-                    "uid": uid,
-                    "email": email,
-                    "firstName": decoded.get("name", "").split(" ")[0] if decoded.get("name") else None,
-                    "lastName": decoded.get("name", "").split(" ")[1] if decoded.get("name") and len(decoded.get("name").split(" ")) > 1 else None,
-                    "photoURL": decoded.get("picture"),
-                    "isGoogleUser": True,
-                }
-                await users_collection.insert_one(new_user)
-                mongo_user = new_user
-
-        # ----------------------------
-        # Case 2: Manual Email/Password Login
-        # ----------------------------
-        else:
-            if not user.email or not user.password:
-                raise HTTPException(status_code=400, detail="Email and password required")
-
-            mongo_user = await users_collection.find_one({"email": user.email})
-            if not mongo_user:
-                raise HTTPException(status_code=404, detail="User not found")
-
-            if not mongo_user.get("password"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="This account was registered with Google. Use Google login."
-                )
-
-            if not bcrypt.checkpw(
-                user.password.encode("utf-8"),
-                mongo_user["password"].encode("utf-8")
-            ):
-                raise HTTPException(status_code=401, detail="Invalid credentials")
-
-        # ✅ Issue backend JWT for both login types
-        backend_token = create_backend_jwt(mongo_user["uid"], mongo_user["email"])
-
+        # ✅ Return user profile (no backend token)
         return JSONResponse(
             status_code=200,
             content={
                 "success": True,
                 "message": "Login successful",
-                "backendToken": backend_token,
                 "user": {
                     "id": mongo_user["uid"],
                     "email": mongo_user["email"],
@@ -206,6 +171,5 @@ async def login_user(user: User, request: Request):
     except HTTPException:
         raise
     except Exception as err:
-        print("Login Error:", err)
+        print("🔥 Login Error:", err)
         raise HTTPException(status_code=500, detail="Server error during login")
-
