@@ -10,7 +10,6 @@ from app.services import firebase_service
 
 router = APIRouter()
 
-
 # ----------------------------
 # Registration
 # ----------------------------
@@ -18,75 +17,97 @@ router = APIRouter()
 async def register_user(user: User, request: Request):
     try:
         is_google_user = bool(user.uid and not user.password)
+        user.isGoogleUser = is_google_user
 
-        required = (
-            ["email", "uid", "firstName"] if is_google_user
-            else ["firstName", "lastName", "email", "password", "dob", "gender"]
-        )
-        missing = [f for f in required if not getattr(user, f)]
+        # -----------------------------
+        # Validate required fields
+        # -----------------------------
+        if is_google_user:
+            required_fields = ["email", "uid", "firstName"]
+        else:
+            required_fields = ["firstName", "lastName", "email", "password", "dob", "gender"]
+
+        missing = [field for field in required_fields if not getattr(user, field)]
         if missing:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=400,
                 detail=f"Missing required fields: {', '.join(missing)}"
             )
 
-        # Check if user exists in MongoDB
-        existing_user = await users_collection.find_one({"email": user.email})
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User already exists. Please log in."
-            )
+        # -----------------------------
+        # Check MongoDB for existing user
+        # -----------------------------
+        if await users_collection.find_one({"email": user.email}):
+            raise HTTPException(status_code=400, detail="User already exists. Please log in.")
 
-        # -------------------------------
-        # Case: Google registration
-        # -------------------------------
+        # -----------------------------
+        # Firebase user creation
+        # -----------------------------
+        uid = None
+        hashed_pw = None
+
         if is_google_user:
             try:
-                firebase_user = admin_auth.get_user_by_email(user.email)
-            except:
-                firebase_user = admin_auth.create_user(
+                fb_user = admin_auth.get_user_by_email(user.email)
+                uid = fb_user.uid
+            except admin_auth.UserNotFoundError:
+                fb_user = admin_auth.create_user(
                     uid=user.uid,
                     email=user.email,
-                    display_name=f"{user.firstName or ''} {user.lastName or ''}".strip(),
-                    photo_url=user.photoURL or None
+                    display_name=f"{user.firstName} {user.lastName or ''}".strip(),
+                    photo_url=user.photoURL or None,
                 )
-            uid = firebase_user.uid
-            hashed_pw = None
-
-        # -------------------------------
-        # Case: Manual registration
-        # -------------------------------
+                uid = fb_user.uid
         else:
-            # 1. Create user in Firebase
-            firebase_user = admin_auth.create_user(
-                email=user.email,
-                password=user.password,
-                display_name=f"{user.firstName or ''} {user.lastName or ''}".strip(),
-            )
-            uid = firebase_user.uid
+            try:
+                fb_user = admin_auth.create_user(
+                    email=user.email,
+                    password=user.password,
+                    display_name=f"{user.firstName} {user.lastName}".strip(),
+                )
+                uid = fb_user.uid
+            except Exception as fb_err:
+                if "EMAIL_EXISTS" in str(fb_err):
+                    fb_user = admin_auth.get_user_by_email(user.email)
+                    uid = fb_user.uid
+                else:
+                    raise HTTPException(status_code=500, detail=f"Firebase error: {fb_err}")
 
-            # 2. Hash password for MongoDB (not same as Firebase storage)
-            hashed_pw = bcrypt.hashpw(
-                user.password.encode("utf-8"), bcrypt.gensalt()
-            ).decode("utf-8")
+            # Hash password for MongoDB
+            hashed_pw = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-        # -------------------------------
-        # Save to MongoDB
-        # -------------------------------
+        # -----------------------------
+        # Prepare MongoDB user doc
+        # -----------------------------
         mongo_user = user.dict()
-        mongo_user["uid"] = uid
-        mongo_user["password"] = hashed_pw
-        mongo_user["createdAt"] = datetime.utcnow()
-        mongo_user["isGoogleUser"] = is_google_user
+        mongo_user.update({
+            "uid": uid,
+            "password": hashed_pw,
+            "isGoogleUser": is_google_user,
+            "createdAt": datetime.utcnow()
+        })
 
-        if mongo_user.get("dob") and isinstance(mongo_user["dob"], date):
-            mongo_user["dob"] = datetime.combine(mongo_user["dob"], datetime.min.time())
+        # Convert dob string to datetime
+        dob = mongo_user.get("dob")
+        if dob:
+            if isinstance(dob, str):
+                try:
+                    mongo_user["dob"] = datetime.fromisoformat(dob)
+                except Exception:
+                    mongo_user["dob"] = None
+            elif isinstance(dob, date):
+                mongo_user["dob"] = datetime.combine(dob, datetime.min.time())
 
+        # -----------------------------
+        # Insert into MongoDB
+        # -----------------------------
         await users_collection.insert_one(mongo_user)
 
+        # -----------------------------
+        # Success Response
+        # -----------------------------
         return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
+            status_code=201,
             content={
                 "success": True,
                 "message": "Registration successful",
@@ -103,10 +124,8 @@ async def register_user(user: User, request: Request):
 
     except HTTPException:
         raise
-    except Exception as err:
-        print("Register Error:", err)
-        raise HTTPException(status_code=500, detail="Server error during registration")
-
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 # ----------------------------
@@ -115,43 +134,63 @@ async def register_user(user: User, request: Request):
 @router.post("/login")
 async def login_user(request: Request):
     """
-    Login with Firebase only.
-    Expect client to send Firebase ID token in Authorization header.
+    Login user with Firebase token verification.
+    Backend ensures user exists in MongoDB.
     """
     try:
-        # 🔑 Expect Firebase ID token from frontend
+        # -----------------------------
+        # Get Firebase ID token from headers
+        # -----------------------------
         auth_header = request.headers.get("authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Missing Firebase ID token")
 
         fb_token = auth_header.split(" ")[1]
 
-        # ✅ Verify Firebase token
+        # -----------------------------
+        # Verify Firebase token
+        # -----------------------------
         try:
             decoded = admin_auth.verify_id_token(fb_token)
         except Exception as e:
+            
             print("❌ Firebase token verification failed:", repr(e))
             raise HTTPException(status_code=401, detail="Invalid or expired Firebase token")
 
         uid = decoded.get("uid")
         email = decoded.get("email")
+        display_name = decoded.get("name") or ""
+        first_name = display_name.split(" ")[0] if display_name else None
+        last_name = display_name.split(" ")[1] if display_name and len(display_name.split(" ")) > 1 else None
+        photo_url = decoded.get("picture")
+        is_google_user = decoded.get("firebase", {}).get("sign_in_provider") == "google.com"
 
-        # 🔍 Ensure user exists in MongoDB
+        # -----------------------------
+        # Ensure user exists in MongoDB
+        # -----------------------------
         mongo_user = await users_collection.find_one({"uid": uid})
-        if not mongo_user:
-            new_user = {
+
+        # If Google login and user does not exist, create Mongo record
+        if not mongo_user and is_google_user:
+            mongo_user = {
                 "uid": uid,
                 "email": email,
-                "firstName": decoded.get("name", "").split(" ")[0] if decoded.get("name") else None,
-                "lastName": decoded.get("name", "").split(" ")[1] if decoded.get("name") and len(decoded.get("name").split(" ")) > 1 else None,
-                "photoURL": decoded.get("picture"),
-                "isGoogleUser": bool(decoded.get("firebase", {}).get("sign_in_provider") == "google.com"),
+                "firstName": first_name,
+                "lastName": last_name,
+                "photoURL": photo_url,
+                "isGoogleUser": True,
                 "createdAt": datetime.utcnow(),
+                "password": None,
             }
-            await users_collection.insert_one(new_user)
-            mongo_user = new_user
+            await users_collection.insert_one(mongo_user)
 
-        # ✅ Return user profile (no backend token)
+        # If manual login and user not in Mongo, error
+        if not mongo_user:
+            raise HTTPException(status_code=404, detail="User not found. Please register first.")
+
+        # -----------------------------
+        # Success response
+        # -----------------------------
         return JSONResponse(
             status_code=200,
             content={
@@ -173,3 +212,4 @@ async def login_user(request: Request):
     except Exception as err:
         print("🔥 Login Error:", err)
         raise HTTPException(status_code=500, detail="Server error during login")
+

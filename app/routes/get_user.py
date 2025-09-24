@@ -24,7 +24,7 @@ async def get_user(request: Request):
         content={
             "uid": str(user.get("uid")),
             "email": user.get("email"),
-            "name": display_name,  # ✅ fallback logic
+            "firstName": display_name,  # ✅ fallback logic
             "photoURL": user.get("photoURL"),
             "isGoogleUser": user.get("isGoogleUser", False),
         }
