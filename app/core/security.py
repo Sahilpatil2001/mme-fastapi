@@ -1,12 +1,24 @@
 import os
+import time
 from fastapi import HTTPException, Request
 from firebase_admin import auth as admin_auth
+MAX_CLOCK_SKEW_SECONDS = 5
 
 # ✅ Decode Firebase token only
 def decode_firebase_token(token: str):
     try:
-        decoded_token = admin_auth.verify_id_token(token)  # uses firebase_service init
+        decoded_token = admin_auth.verify_id_token(token)  
+
+          # Manually allow small clock skew
+        now = int(time.time())
+        if "iat" in decoded_token and decoded_token["iat"] > now + MAX_CLOCK_SKEW_SECONDS:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid Firebase token: Token issued in the future (clock skew).",
+            )
+        
         return {"uid": decoded_token["uid"], "email": decoded_token.get("email")}
+    
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Invalid Firebase token: {e}")
 

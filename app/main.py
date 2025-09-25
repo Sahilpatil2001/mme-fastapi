@@ -7,6 +7,7 @@ from app.routes import form_submition
 from app.routes import core_settings
 from app.routes import get_user
 from app.routes import voices
+from app.routes import loggedin_user
 from app.routes import merge_audio
 app = FastAPI(title="Firebase Auth API")
 
@@ -27,6 +28,7 @@ app.add_middleware(FirebaseAuthMiddleware)
 app.include_router(auth.router, tags=["Authentication"])
 app.include_router(auth.router, prefix="/api")
 app.include_router(get_user.router, prefix="/api")
+app.include_router(loggedin_user.router, prefix="/api")
 app.include_router(merge_audio.router, prefix="/api")
 app.include_router(form_submition.router, prefix="/api", tags=["Form"])
 app.include_router(voices.router, prefix="/api")
