@@ -1,14 +1,177 @@
-import os, shutil
+# # NEW CODE 
+# import os
+# import re
+# import time
+# import subprocess
+# from pathlib import Path
+# from typing import List, Dict, Any, Optional
+
+# from fastapi import APIRouter, Request, HTTPException, Response
+# from fastapi.responses import JSONResponse
+
+# from app.utils.generate_audio import generate_audio  # your ElevenLabs generator
+
+# router = APIRouter()
+
+# # Ensure audios folder exists
+# audios_dir = Path(__file__).resolve().parent.parent / "audios"
+# audios_dir.mkdir(exist_ok=True)
+
+
+# # -----------------------------
+# # 🔹 Helper: Parse text into chunks (sentences + pauses)
+# # -----------------------------
+# def parse_text_with_pauses(text: str) -> List[Dict[str, Any]]:
+#     tokens = re.split(r'(\(\d+s-pause\))', text)
+#     chunks: List[Dict[str, Any]] = []
+
+#     for token in tokens:
+#         token = token.strip()
+#         if not token:
+#             continue
+
+#         pause_match = re.match(r"\((\d+)s-pause\)", token, re.IGNORECASE)
+#         if pause_match:
+#             chunks.append({"type": "pause", "duration": int(pause_match.group(1))})
+#         else:
+#             chunks.append({"type": "text", "sentence": token})
+
+#     return chunks
+
+
+# # -----------------------------
+# # 🔹 Helper: Generate silence file if not exists
+# # -----------------------------
+# def get_silence_file(duration: int) -> str:
+#     silence_path = audios_dir / f"silence_{duration}s.mp3"
+#     if not silence_path.exists():
+#         print(f"🎵 Generating silence {duration}s")
+#         subprocess.run(
+#             [
+#                 "ffmpeg", "-y",
+#                 "-f", "lavfi",
+#                 "-i", "anullsrc=r=44100:cl=mono",
+#                 "-t", str(duration),
+#                 "-q:a", "9",
+#                 "-acodec", "libmp3lame",
+#                 str(silence_path)
+#             ],
+#             check=True
+#         )
+#     return str(silence_path)
+
+
+# # -----------------------------
+# # 🔹 API: Merge dynamic audio respecting pauses
+# # -----------------------------
+# @router.post("/merge-audio")
+# async def merge_dynamic_audio(request: Request):
+#     try:
+#         body = await request.json()
+#         print("📥 Incoming request body:", body)
+
+#         sentences: List[str] = body.get("sentences")
+#         voice_id: Optional[str] = body.get("voiceId")
+
+#         if not voice_id or not isinstance(sentences, list) or not sentences:
+#             raise HTTPException(status_code=400, detail="voiceId and sentences are required")
+
+#         # Parse all sentences into text + pauses
+#         all_chunks: List[Dict[str, Any]] = []
+#         for line in sentences:
+#             all_chunks.extend(parse_text_with_pauses(line))
+
+#         if not all_chunks:
+#             raise HTTPException(status_code=400, detail="No valid sentences or pauses found")
+
+#         print("✅ Parsed chunks:", all_chunks)
+
+#         # Cache silence files by duration
+#         silence_cache: Dict[int, str] = {}
+
+#         # Build list of audio files in exact order
+#         final_files: List[str] = []
+#         request_ids: List[str] = []
+
+#         for chunk in all_chunks:
+#             if chunk["type"] == "text":
+#                 # Generate TTS per sentence
+#                 tts_path = audios_dir / f"tts_{int(time.time()*1000)}.mp3"
+#                 print(f"🎤 Generating TTS for: {chunk['sentence']}")
+#                 res = await generate_audio(chunk["sentence"], str(tts_path), voice_id)
+#                 request_id = res.get("request_id")
+#                 if request_id:
+#                     request_ids.append(request_id)
+#                 if not tts_path.exists():
+#                     raise HTTPException(status_code=500, detail="TTS generation failed")
+#                 final_files.append(str(tts_path))
+#             elif chunk["type"] == "pause":
+#                 duration = chunk["duration"]
+#                 if duration not in silence_cache:
+#                     silence_cache[duration] = get_silence_file(duration)
+#                 final_files.append(silence_cache[duration])
+
+#         # -----------------------------
+#         # 🔹 Merge all audio files into one
+#         # -----------------------------
+#         concat_file_path = audios_dir / f"concat_{int(time.time()*1000)}.txt"
+#         with open(concat_file_path, "w", encoding="utf-8") as f:
+#             for file in final_files:
+#                 f.write(f"file '{Path(file).as_posix()}'\n")
+
+#         output_path = audios_dir / f"Audio_{int(time.time()*1000)}.mp3"
+#         subprocess.run(
+#             [
+#                 "ffmpeg", "-y",
+#                 "-f", "concat",
+#                 "-safe", "0",
+#                 "-i", str(concat_file_path),
+#                 "-c", "copy",
+#                 str(output_path)
+#             ],
+#             check=True
+#         )
+
+#         print("✅ Final audio created:", output_path)
+
+#         # Cleanup intermediate TTS files and concat list
+#         for f in final_files:
+#             if "tts_" in f and Path(f).exists():
+#                 os.remove(f)
+#         if concat_file_path.exists():
+#             os.remove(concat_file_path)
+
+#         # Return merged audio
+#         audio_buffer = output_path.read_bytes()
+#         headers = {}
+#         if request_ids:
+#             headers["request-id"] = ",".join(request_ids)
+#             headers["Access-Control-Expose-Headers"] = "request-id"
+
+#         return Response(content=audio_buffer, media_type="audio/mpeg", headers=headers)
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         print("🔥 Unexpected error:", str(e))
+#         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+
+
+
+# NEW Code
+import os
 import re
 import time
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, Request, HTTPException, Response
 from fastapi.responses import JSONResponse
 
-from app.utils.generate_audio import generate_audio  # 👈 your custom audio generator
+from app.utils.generate_audio import generate_audio  # your ElevenLabs generator
 
 router = APIRouter()
 
@@ -17,145 +180,151 @@ audios_dir = Path(__file__).resolve().parent.parent / "audios"
 audios_dir.mkdir(exist_ok=True)
 
 
+# -----------------------------
+# 🔹 Helper: Parse text into chunks (sentences + pauses)
+# -----------------------------
+def parse_text_with_pauses(text: str) -> List[Dict[str, Any]]:
+    tokens = re.split(r'(\(\d+s-pause\))', text)
+    chunks: List[Dict[str, Any]] = []
+
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        pause_match = re.match(r"\((\d+)s-pause\)", token, re.IGNORECASE)
+        if pause_match:
+            chunks.append({"type": "pause", "duration": int(pause_match.group(1))})
+        else:
+            chunks.append({"type": "text", "sentence": token})
+    return chunks
+
+
+# -----------------------------
+# 🔹 Helper: Generate silence file if not exists
+# -----------------------------
+def get_silence_file(duration: int) -> str:
+    silence_path = audios_dir / f"silence_{duration}s.mp3"
+    if not silence_path.exists():
+        print(f"🎵 Generating silence {duration}s")
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", "anullsrc=r=44100:cl=mono",
+                "-t", str(duration),
+                "-q:a", "9",
+                "-acodec", "libmp3lame",
+                str(silence_path)
+            ],
+            check=True
+        )
+    return str(silence_path)
+
+
+# -----------------------------
+# 🔹 Helper: Sanitize first sentence for filename
+# -----------------------------
+def sanitize_filename(text: str) -> str:
+    safe_text = re.sub(r'[^a-zA-Z0-9]+', '_', text.strip().lower())
+    return safe_text[:50]  # limit length to avoid very long filenames
+
+
+# -----------------------------
+# 🔹 API: Merge dynamic audio respecting pauses
+# -----------------------------
 @router.post("/merge-audio")
 async def merge_dynamic_audio(request: Request):
     try:
         body = await request.json()
         print("📥 Incoming request body:", body)
-        print("PATH seen by FastAPI:", os.environ.get("PATH"))
-        print("ffmpeg resolved to:", shutil.which("ffmpeg"))
 
         sentences: List[str] = body.get("sentences")
         voice_id: Optional[str] = body.get("voiceId")
 
-        if not voice_id or not isinstance(sentences, list) or len(sentences) == 0:
+        if not voice_id or not isinstance(sentences, list) or not sentences:
             raise HTTPException(status_code=400, detail="voiceId and sentences are required")
 
-        # -----------------------------
-        # 🔹 Parse sentences + pauses
-        # -----------------------------
-        sentence_chunks = []
-        for idx, line in enumerate(sentences):
-            pause_match = re.search(r"\((\d+)s-pause\)", line, re.IGNORECASE)
-            pause = int(pause_match.group(1)) if pause_match else None
-            sentence = re.sub(r"\(\d+s-pause\)", "", line, flags=re.IGNORECASE).strip()
+        # Parse all sentences into text + pauses
+        all_chunks: List[Dict[str, Any]] = []
+        for line in sentences:
+            all_chunks.extend(parse_text_with_pauses(line))
+        if not all_chunks:
+            raise HTTPException(status_code=400, detail="No valid sentences or pauses found")
 
-            sentence_chunks.append({
-                "sentence": sentence,
-                "pause": pause,
-                "previousText": re.sub(r"\(\d+s-pause\)", "", sentences[idx - 1], flags=re.IGNORECASE).strip()
-                if idx > 0 else None,
-                "nextText": re.sub(r"\(\d+s-pause\)", "", sentences[idx + 1], flags=re.IGNORECASE).strip()
-                if idx < len(sentences) - 1 else None,
-            })
+        print("✅ Parsed chunks:", all_chunks)
 
-        print("✅ Parsed sentence chunks:", sentence_chunks)
+        # Cache silence files by duration
+        silence_cache: Dict[int, str] = {}
 
-        # -----------------------------
-        # 🔹 Pre-generate silence files
-        # -----------------------------
-        silence_files = {}
-        for chunk in sentence_chunks:
-            pause = chunk["pause"]
-            if pause and pause not in silence_files:
-                silence_path = audios_dir / f"silence_{pause}s.mp3"
-                if not silence_path.exists():
-                    print(f"🎵 Generating silence {pause}s at {silence_path}")
-                    subprocess.run([
-                        "ffmpeg", "-y",
-                        "-f", "lavfi",
-                        "-i", "anullsrc=r=44100:cl=mono",
-                        "-t", str(pause),
-                        "-q:a", "9",
-                        "-acodec", "libmp3lame",
-                        str(silence_path)
-                    ], check=True)
-                silence_files[pause] = str(silence_path)
+        # Build list of audio files in exact order
+        final_files: List[str] = []
+        request_ids: List[str] = []
+
+        for chunk in all_chunks:
+            if chunk["type"] == "text":
+                # Generate TTS per sentence
+                tts_path = audios_dir / f"tts_{int(time.time()*1000)}.mp3"
+                print(f"🎤 Generating TTS for: {chunk['sentence']}")
+                res = await generate_audio(chunk["sentence"], str(tts_path), voice_id)
+                request_id = res.get("request_id")
+                if request_id:
+                    request_ids.append(request_id)
+                if not tts_path.exists():
+                    raise HTTPException(status_code=500, detail="TTS generation failed")
+                final_files.append(str(tts_path))
+            elif chunk["type"] == "pause":
+                duration = chunk["duration"]
+                if duration not in silence_cache:
+                    silence_cache[duration] = get_silence_file(duration)
+                final_files.append(silence_cache[duration])
 
         # -----------------------------
-        # 🔹 Generate audios for each sentence
+        # 🔹 Generate final filename starting with first sentence
         # -----------------------------
-        audio_files = []
-        request_ids = []
-
-        for i, chunk in enumerate(sentence_chunks):
-            sentence, pause, prev_text, next_text = (
-                chunk["sentence"], chunk["pause"], chunk["previousText"], chunk["nextText"]
-            )
-
-            sentence_path = audios_dir / f"temp_sentence_{int(time.time() * 1000)}_{i}.mp3"
-
-            print(f"🎤 Generating audio for: '{sentence}' → {sentence_path}")
-
-            res_request_id, saved_path = await generate_audio(
-                sentence, str(sentence_path), voice_id, prev_text, next_text
-            )
-
-            if res_request_id:
-                request_ids.append(res_request_id)
-            else:
-                print(f"⚠️ No request-id returned for: '{sentence}'")
-
-            audio_files.append(saved_path)
-
-            if pause and i < len(sentence_chunks) - 1:
-                print(f"⏸ Adding silence of {pause}s after sentence {i}")
-                audio_files.append(silence_files[pause])
+        first_sentence_text = all_chunks[0]['sentence'] if all_chunks else "audio"
+        safe_name = sanitize_filename(first_sentence_text)
+        output_path = audios_dir / f"{safe_name}_{int(time.time()*1000)}.mp3"
 
         # -----------------------------
-        # 🔹 Validate audio files
+        # 🔹 Merge all audio files into one
         # -----------------------------
-        for file in audio_files:
-            if not os.path.exists(file):
-                raise HTTPException(status_code=500, detail=f"Missing audio file: {file}")
+        concat_file_path = audios_dir / f"concat_{int(time.time()*1000)}.txt"
+        with open(concat_file_path, "w", encoding="utf-8") as f:
+            for file in final_files:
+                f.write(f"file '{Path(file).as_posix()}'\n")
 
-        # -----------------------------
-        # 🔹 Concatenate with FFmpeg
-        # -----------------------------
-        concat_txt = "\n".join([f"file '{file.replace(os.sep, '/')}'" for file in audio_files])
-        concat_file_path = audios_dir / f"concat_{int(time.time() * 1000)}.txt"
-        concat_file_path.write_text(concat_txt)
-
-        output_path = audios_dir / f"Audio_{int(time.time() * 1000)}.mp3"
-
-        print("🔗 Merging audios with FFmpeg...")
-        try:
-            subprocess.run([
+        subprocess.run(
+            [
                 "ffmpeg", "-y",
                 "-f", "concat",
                 "-safe", "0",
                 "-i", str(concat_file_path),
                 "-c", "copy",
                 str(output_path)
-            ], check=True)
-        except subprocess.CalledProcessError as e:
-            print("❌ FFmpeg merge failed:", e)
-            raise HTTPException(status_code=500, detail="Failed to merge audio.")
+            ],
+            check=True
+        )
 
-        print("✅ Audio successfully merged:", output_path)
+        print("✅ Final audio created:", output_path)
 
-        # -----------------------------
-        # 🔹 Cleanup temp files
-        # -----------------------------
-        for file in audio_files:
-            if "temp_sentence_" in file and os.path.exists(file):
-                os.remove(file)
+        # Cleanup intermediate TTS files and concat list
+        for f in final_files:
+            if "tts_" in f and Path(f).exists():
+                os.remove(f)
         if concat_file_path.exists():
             os.remove(concat_file_path)
 
-        # -----------------------------
-        # 🔹 Return final audio + last 3 request IDs
-        # -----------------------------
+        # Return merged audio
         audio_buffer = output_path.read_bytes()
         headers = {}
-
         if request_ids:
-            last_three = ",".join(request_ids[-3:])
-            headers["request-id"] = last_three
+            headers["request-id"] = ",".join(request_ids)
             headers["Access-Control-Expose-Headers"] = "request-id"
 
         return Response(content=audio_buffer, media_type="audio/mpeg", headers=headers)
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print("🔥 Error in merge_dynamic_audio:", str(e))
+        print("🔥 Unexpected error:", str(e))
         return JSONResponse(status_code=500, content={"error": str(e)})

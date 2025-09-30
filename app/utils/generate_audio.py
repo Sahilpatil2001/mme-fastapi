@@ -14,7 +14,7 @@ async def generate_audio(
     voice_id: str,
     previous_text: str | None = None,
     next_text: str | None = None,
-) -> dict:
+) -> tuple[str | None, str]:
   
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
@@ -34,7 +34,7 @@ async def generate_audio(
             print("❌ ElevenLabs error response:", response.text)
             response.raise_for_status()
 
-        request_id = response.headers.get("request-id")
+        request_id = response.headers.get("request-id")or response.headers.get("Request-Id")
 
         if request_id:
             print(f"✅ request-id found: {request_id}")

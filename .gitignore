@@ -22,4 +22,8 @@ ENV/
 # Firebase / Service account keys
 serviceAccountKey.json
 
+# Audios folder
+/app/audios/
 
+# igonre the mp3 files 
+*.mp3
