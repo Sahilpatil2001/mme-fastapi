@@ -11,6 +11,10 @@ PUBLIC_PATHS = ["/api/register", "/api/login", "/docs", "/openapi.json"]
 
 class FirebaseAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/chat"):
+         # Skip Firebase Auth for ChatGPT route
+         return await call_next(request)
+        
         print("👉 Request path:", request.url.path)
 
         # Allow CORS preflight
